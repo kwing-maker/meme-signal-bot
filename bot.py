@@ -19,6 +19,21 @@ def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
+def get_token_name(mint):
+    try:
+        res = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}", timeout=8)
+        data = res.json()
+        pairs = data.get("pairs", [])
+        if pairs:
+            base = pairs[0].get("baseToken", {})
+            name = base.get("name", "")
+            symbol = base.get("symbol", "")
+            if symbol:
+                return f"{name} (${symbol})"
+    except:
+        pass
+    return "不明"
+
 def check_smart_money():
     try:
         url = f"https://api.helius.xyz/v0/addresses/{RAYDIUM}/transactions"
@@ -31,10 +46,11 @@ def check_smart_money():
             if not fp:
                 continue
             wallet_activity[fp] = wallet_activity.get(fp, 0) + 1
-        smart_wallets = [w for w, c in wallet_activity.items() if c >= 3]
+        # 5回以上に絞る（厳しく）
+        smart_wallets = [w for w, c in wallet_activity.items() if c >= 5]
         return smart_wallets, txns
     except Exception as e:
-        print(f"smart_money error: {e}")
+        print(f"error: {e}")
         return [], []
 
 def check_new_tokens(txns, smart_wallets):
@@ -42,8 +58,10 @@ def check_new_tokens(txns, smart_wallets):
     alerts = []
     for tx in txns:
         fp = tx.get("feePayer", "")
-        transfers = tx.get("tokenTransfers", [])
-        for t in transfers:
+        # Smart Moneyのみ
+        if fp not in smart_set:
+            continue
+        for t in tx.get("tokenTransfers", []):
             mint = t.get("mint", "")
             to = t.get("toUserAccount", "")
             amt = t.get("tokenAmount", 0)
@@ -55,8 +73,7 @@ def check_new_tokens(txns, smart_wallets):
             if key in seen:
                 continue
             seen.add(key)
-            is_smart = fp in smart_set
-            alerts.append({"mint": mint, "wallet": fp, "amount": amt, "smart": is_smart, "sig": tx.get("signature", "")[:12]})
+            alerts.append({"mint": mint, "wallet": fp, "amount": amt, "sig": tx.get("signature", "")[:12]})
     return alerts
 
 def check_dexscreener():
@@ -64,7 +81,7 @@ def check_dexscreener():
         res = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=10)
         data = res.json()
         alerts = []
-        for item in data[:5]:
+        for item in data[:3]:
             mint = item.get("tokenAddress", "")
             chain = item.get("chainId", "")
             if chain != "solana" or not mint:
@@ -73,10 +90,10 @@ def check_dexscreener():
             if key in seen:
                 continue
             seen.add(key)
-            alerts.append({"mint": mint, "url": item.get("url", ""), "desc": item.get("description", "ミームコイン急上昇中")})
+            alerts.append({"mint": mint, "url": item.get("url", ""), "desc": item.get("description", "")})
         return alerts
     except Exception as e:
-        print(f"dexscreener error: {e}")
+        print(f"dex error: {e}")
         return []
 
 def check_liquidity_spike(txns):
@@ -89,7 +106,8 @@ def check_liquidity_spike(txns):
             mint_count[mint] = mint_count.get(mint, 0) + 1
     spikes = []
     for mint, count in mint_count.items():
-        if count >= 5:
+        # 8件以上に絞る（厳しく）
+        if count >= 8:
             key = f"spike_{mint}"
             if key not in seen:
                 seen.add(key)
@@ -97,22 +115,44 @@ def check_liquidity_spike(txns):
     return spikes
 
 def run():
-    print("🚀 起動中...")
-    send("🚀 <b>Meme Signal Bot が起動しました！</b>\nSolanaのミームコインシグナルを監視中...")
+    print("起動中...")
+    send("🚀 <b>Meme Signal Bot 起動！</b>\nSmart Moneyシグナルを監視中...")
     while True:
         try:
             smart_wallets, txns = check_smart_money()
-            if smart_wallets:
-                for a in check_new_tokens(txns, smart_wallets):
-                    tag = "🧠 <b>Smart Money購入！</b>" if a["smart"] else "🆕 <b>新規トークン検出</b>"
-                    send(f"{tag}\n\n📍 Mint: <code>{a['mint'][:20]}...</code>\n👛 Wallet: <code>{a['wallet'][:12]}...</code>\n💰 数量: {a['amount']:,.0f}\n📊 <a href='https://dexscreener.com/solana/{a['mint']}'>DexScreenerで確認</a>\n\n⚠️ リスク高（ミームコイン）")
+            for a in check_new_tokens(txns, smart_wallets):
+                name = get_token_name(a["mint"])
+                send(
+                    f"🧠 <b>Smart Money購入！</b>\n\n"
+                    f"🪙 銘柄: <b>{name}</b>\n"
+                    f"📍 Mint: <code>{a['mint'][:20]}...</code>\n"
+                    f"👛 Wallet: <code>{a['wallet'][:12]}...</code>\n"
+                    f"💰 数量: {a['amount']:,.0f}\n"
+                    f"📊 <a href='https://dexscreener.com/solana/{a['mint']}'>DexScreenerで確認</a>\n\n"
+                    f"⚠️ リスク高（ミームコイン）"
+                )
             for s in check_liquidity_spike(txns):
-                send(f"💧 <b>流動性急増！</b>\n\n📍 Mint: <code>{s['mint'][:20]}...</code>\n🔥 直近取引数: {s['count']}件\n📊 <a href='https://dexscreener.com/solana/{s['mint']}'>DexScreenerで確認</a>\n\n⚠️ リスク高（ミームコイン）")
+                name = get_token_name(s["mint"])
+                send(
+                    f"💧 <b>流動性急増！</b>\n\n"
+                    f"🪙 銘柄: <b>{name}</b>\n"
+                    f"📍 Mint: <code>{s['mint'][:20]}...</code>\n"
+                    f"🔥 直近取引数: {s['count']}件\n"
+                    f"📊 <a href='https://dexscreener.com/solana/{s['mint']}'>DexScreenerで確認</a>\n\n"
+                    f"⚠️ リスク高（ミームコイン）"
+                )
             for d in check_dexscreener():
-                send(f"📈 <b>DexScreenerトレンド急上昇！</b>\n\n📍 Mint: <code>{d['mint'][:20]}...</code>\n📝 {d['desc']}\n🔗 <a href='{d['url']}'>詳細を見る</a>\n\n⚠️ リスク高（ミームコイン）")
+                name = get_token_name(d["mint"])
+                send(
+                    f"📈 <b>DexScreenerトレンド急上昇！</b>\n\n"
+                    f"🪙 銘柄: <b>{name}</b>\n"
+                    f"📍 Mint: <code>{d['mint'][:20]}...</code>\n"
+                    f"🔗 <a href='{d['url']}'>詳細を見る</a>\n\n"
+                    f"⚠️ リスク高（ミームコイン）"
+                )
         except Exception as e:
             print(f"エラー: {e}")
-        time.sleep(20)
+        time.sleep(30)
 
 if __name__ == "__main__":
     run()
