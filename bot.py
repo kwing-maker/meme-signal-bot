@@ -6,12 +6,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 HELIUS_API_KEY = os.environ.get("HELIUS_API_KEY")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-SKIP_MINTS = {
-    "So11111111111111111111111111111111111111112",
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-}
-
 seen = set()
 
 def send(msg):
@@ -33,11 +27,11 @@ def run():
     print("起動中...")
     send("🚀 <b>Meme Signal Bot 起動！</b>")
 
-    # DexScreenerトレンドのみを監視（一番信頼性高い）
     while True:
         try:
             res = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=10)
             items = res.json()
+            new_count = 0
             for item in items:
                 mint = item.get("tokenAddress", "")
                 chain = item.get("chainId", "")
@@ -46,20 +40,25 @@ def run():
                 if mint in seen:
                     continue
                 seen.add(mint)
+                new_count += 1
                 name = get_token_name(mint)
-                url = item.get("url", f"https://dexscreener.com/solana/{mint}")
+                gmgn = f"https://gmgn.ai/sol/token/{mint}"
+                dex = f"https://dexscreener.com/solana/{mint}"
                 send(
                     f"📈 <b>トレンド急上昇！</b>\n\n"
                     f"🪙 銘柄: <b>{name}</b>\n"
-                    f"🔗 <a href='{url}'>DexScreenerで確認</a>\n\n"
+                    f"🔗 <a href='{gmgn}'>GMGNで確認</a>  |  <a href='{dex}'>DexScreener</a>\n\n"
                     f"⚠️ リスク高（ミームコイン）"
                 )
-                time.sleep(3)
+                time.sleep(2)
+
+            print(f"チェック完了 新規{new_count}件 次は10分後")
+
         except Exception as e:
             print(f"エラー: {e}")
 
-        # 5分ごとにチェック
-        time.sleep(300)
+        # 10分待つ
+        time.sleep(600)
 
 if __name__ == "__main__":
     run()
